@@ -146,8 +146,10 @@ class Chain:
         self.active: list[BlockIndex] = [self.genesis]
         self.best_header: BlockIndex = self.genesis
         self.orphans: OrderedDict[bytes, Block] = OrderedDict()
+        self.tx_index: dict[bytes, list[bytes]] = {}  # txid -> hashes of blocks containing it
         self.utxos = UtxoSet()
         self.undo[genesis.hash] = self.utxos.apply_block(genesis, 0)
+        self.tx_index[genesis.txs[0].txid] = [genesis.hash]
 
     # -- queries ---------------------------------------------------------------------------
 
@@ -344,6 +346,8 @@ class Chain:
         idx = self.add_header(block.header)
         self.blocks[idx.hash] = block
         idx.has_data = True
+        for tx in block.txs:
+            self.tx_index.setdefault(tx.txid, []).append(idx.hash)
         # Propagate "complete" down to descendants that arrived before this block did
         # (happens in headers-first sync when block bodies come out of order).
         stack = [idx]
@@ -424,6 +428,16 @@ class Chain:
                     update.invalidated += self._mark_invalid(idx)
                     break
                 update.connected.append(block)
+
+    def find_tx(self, txid: bytes) -> tuple[Transaction, BlockIndex] | None:
+        """Locate a transaction, preferring its active-chain block over stale ones."""
+        hashes = self.tx_index.get(txid, [])
+        for block_hash in sorted(hashes, key=lambda h: not self.contains(h)):
+            block = self.blocks[block_hash]
+            for tx in block.txs:
+                if tx.txid == txid:
+                    return tx, self.index[block_hash]
+        return None
 
     # -- reporting -------------------------------------------------------------------------
 

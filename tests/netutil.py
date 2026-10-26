@@ -36,9 +36,10 @@ async def start_node(name: str, params: ConsensusParams = REGTEST, **overrides: 
 
 
 def mine_local(node: Node, n: int, script: bytes = b"\x51") -> None:
-    """Mine ``n`` blocks directly into a node (no networking involved)."""
+    """Mine ``n`` blocks (with the node's mempool) directly into a node, no networking."""
     for _ in range(n):
-        node.process_block(mine_block(node.chain, script))
+        txs, fees = node.mempool.select(node.params.max_block_size // 2)
+        node.process_block(mine_block(node.chain, script, txs, fees=fees))
 
 
 class RawClient:
