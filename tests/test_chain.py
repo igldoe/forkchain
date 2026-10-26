@@ -56,7 +56,7 @@ def test_double_spend_inside_block_rejected(
     tx2 = alice.build_payment(coins, [TxOut(2 * COIN, bob.script_pubkey)], fee=0)
     block = mine_block(harness.chain, alice.script_pubkey, [tx1, tx2])
     with pytest.raises(ValidationError, match="missingorspent"):
-        harness.chain.add_block(block)
+        harness.chain.add_block(block).check()
     assert harness.chain.height == 2
 
 
@@ -70,7 +70,7 @@ def test_double_spend_across_blocks_rejected(
     tx2 = alice.build_payment(coins, [TxOut(2 * COIN, bob.script_pubkey)], fee=0)
     harness.clock.tick(1000)
     with pytest.raises(ValidationError, match="missingorspent"):
-        harness.chain.add_block(mine_block(harness.chain, alice.script_pubkey, [tx2]))
+        harness.chain.add_block(mine_block(harness.chain, alice.script_pubkey, [tx2])).check()
 
 
 def test_forged_signature_rejected(harness: ChainHarness, alice: Wallet, bob: Wallet) -> None:
@@ -105,7 +105,7 @@ def test_overspend_and_coinbase_amount(harness: ChainHarness, alice: Wallet, bob
         check_tx_inputs(over, harness.chain.utxos, 3, REGTEST)
     greedy = mine_block(harness.chain, alice.script_pubkey, fees=1)
     with pytest.raises(ValidationError, match="bad-cb-amount"):
-        harness.chain.add_block(greedy)
+        harness.chain.add_block(greedy).check()
 
 
 def test_coinbase_maturity() -> None:
@@ -137,7 +137,7 @@ def test_coinbase_rules(harness: ChainHarness, alice: Wallet) -> None:
     header = replace(template.header, merkle_root=merkle_root([cb.txid]))
     harness.clock.tick(1000)
     with pytest.raises(ValidationError, match="bad-cb-height"):
-        harness.chain.add_block(solve(Block(header, (cb,))))
+        harness.chain.add_block(solve(Block(header, (cb,)))).check()
     with pytest.raises(ValidationError, match="bad-txns-coinbase"):
         check_tx_inputs(cb, harness.chain.utxos, 1, REGTEST)
 
@@ -147,27 +147,30 @@ def test_header_context_rules(harness: ChainHarness, alice: Wallet) -> None:
     template = build_template(harness.chain, alice.script_pubkey)
     wrong_bits = Block(replace(template.header, bits=0x2000FFFF), template.txs)
     with pytest.raises(ValidationError, match="bad-diffbits"):
-        harness.chain.add_block(solve(wrong_bits))
+        harness.chain.add_block(solve(wrong_bits)).check()
     old = Block(replace(template.header, timestamp=REGTEST.genesis_timestamp_ms), template.txs)
     with pytest.raises(ValidationError, match="time-too-old"):
-        harness.chain.add_block(solve(old))
+        harness.chain.add_block(solve(old)).check()
     future = harness.clock.now + REGTEST.max_future_drift_ms + 1
     new = Block(replace(template.header, timestamp=future), template.txs)
     with pytest.raises(ValidationError, match="time-too-new"):
-        harness.chain.add_block(solve(new))
+        harness.chain.add_block(solve(new)).check()
 
 
-def test_rejects_block_not_on_tip(harness: ChainHarness, alice: Wallet) -> None:
-    harness.mine(alice.script_pubkey)
+def test_block_off_tip_becomes_side_branch(harness: ChainHarness, alice: Wallet) -> None:
+    tip = harness.mine(alice.script_pubkey)
     harness.clock.tick(1)
     stale = mine_block(harness.chain, alice.script_pubkey, parent=harness.chain.genesis)
-    with pytest.raises(ValidationError, match="bad-prevblk"):
-        harness.chain.add_block(stale)
+    assert harness.chain.add_block(stale).status == "side"
+    assert harness.chain.tip.hash == tip.hash  # equal work: first seen wins
 
 
 def test_duplicate_block_is_idempotent(harness: ChainHarness, alice: Wallet) -> None:
     block = harness.mine(alice.script_pubkey)
-    assert harness.chain.add_block(block).height == 1
+    result = harness.chain.add_block(block).check()
+    assert result.status == "duplicate"
+    assert result.index is not None
+    assert result.index.height == 1
 
 
 def test_halving() -> None:

@@ -47,7 +47,7 @@ class ChainHarness:
     ) -> Block:
         self.clock.tick(step_ms if step_ms is not None else self.params.target_block_time_ms)
         block = mine_block(self.chain, script_pubkey, txs, fees=fees)
-        self.chain.add_block(block)
+        self.chain.add_block(block).check()
         return block
 
     def mine_many(self, n: int, script_pubkey: bytes) -> list[Block]:

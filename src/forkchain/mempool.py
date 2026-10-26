@@ -17,7 +17,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
 from forkchain.block import Block, check_tx_basic
-from forkchain.chain import Chain, Clock, wall_clock_ms
+from forkchain.chain import Chain, ChainUpdate, Clock, wall_clock_ms
 from forkchain.errors import MissingDataError, ValidationError
 from forkchain.tx import OutPoint, Transaction
 from forkchain.utxo import Coin
@@ -55,6 +55,16 @@ class MempoolEntry:
             "time": self.time_ms,
             "parents": sorted(p.hex() for p in self.parents),
         }
+
+
+@dataclass(frozen=True)
+class SyncResult:
+    """How the pool reacted to a chain update."""
+
+    reverted: tuple[bytes, ...] = ()  # txs that left the active chain in a reorg
+    readded: tuple[bytes, ...] = ()  # ... of which are back in the pool
+    dropped: tuple[bytes, ...] = ()  # pool/reverted txs now invalid (e.g. double-spent)
+    conflicted: tuple[bytes, ...] = ()  # pool txs evicted by a conflicting confirmed tx
 
 
 @dataclass(frozen=True)
@@ -279,6 +289,22 @@ class Mempool:
                 if spender is not None and spender != tx.txid:
                     conflicted |= self.remove(spender)
         return conflicted
+
+    def chain_updated(self, update: ChainUpdate) -> SyncResult:
+        """Bring the pool in line with the chain after ``Chain.add_block``."""
+        if not update.disconnected:
+            conflicted: set[bytes] = set()
+            for block in update.connected:
+                conflicted |= self.block_connected(block)
+            return SyncResult(conflicted=tuple(sorted(conflicted)))
+        reverted = self.chain.reverted_transactions(update)
+        reverted_ids = {tx.txid for tx in reverted}
+        readded, dropped = self.resync(reverted)
+        return SyncResult(
+            reverted=tuple(tx.txid for tx in reverted),
+            readded=tuple(t for t in readded if t in reverted_ids),
+            dropped=tuple(dropped),
+        )
 
     def resync(self, returned: Sequence[Transaction] = ()) -> tuple[list[bytes], list[bytes]]:
         """Rebuild the pool after a reorg.
