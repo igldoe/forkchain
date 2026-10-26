@@ -355,8 +355,15 @@ class NodeAPI:
         except ApiError as exc:
             raise ApiError("nothing found for that hash") from exc
 
-    def events(self, since: int = 0, limit: int = 200) -> list[JSON]:
-        return [e for e in self.node.events if e["time"] >= since][-limit:]
+    def events(
+        self, since: int = 0, limit: int = 200, kinds: list[str] | None = None
+    ) -> list[JSON]:
+        wanted = set(kinds) if kinds else None
+        return [
+            e
+            for e in self.node.events
+            if e["time"] >= since and (wanted is None or e["type"] in wanted)
+        ][-limit:]
 
     # -- actions ---------------------------------------------------------------------------
 

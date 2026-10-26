@@ -379,6 +379,24 @@ class Node:
         if peer.handshake_done or not peer.info.node_id:
             self._punish(peer, 10, "unexpected verack")
             return
+        twin = next(
+            (
+                p
+                for p in self.peers.values()
+                if p is not peer and p.handshake_done and p.info.node_id == peer.info.node_id
+            ),
+            None,
+        )
+        if twin is not None:
+            # Both nodes dialled each other. Keep the link opened by the smaller node id;
+            # both ends evaluate the same rule, so exactly one connection survives.
+            def initiator(p: Peer) -> str:
+                return p.info.node_id if p.inbound else self.node_id
+
+            loser = peer if initiator(peer) > initiator(twin) else twin
+            loser.close()
+            if loser is peer:
+                return
         peer.handshake_done = True
         self.known_addrs.add(peer.listen_addr)
         peer.send("getaddr")

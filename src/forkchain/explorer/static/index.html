@@ -1,0 +1,688 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>forkchain explorer</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #111110;
+    --surface-1: #1a1a19;
+    --surface-2: #232321;
+    --surface-3: #2d2d2a;
+    --border: #383835;
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --text-muted: #8f8e86;
+    /* categorical slots, dark steps, fixed order: slot 1 = main chain, then fork branches */
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+    --other: #6b6a64;
+    --good: #0ca30c;
+    --warning: #fab219;
+    --critical: #d03b3b;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text-primary); font: 13px/1.45 var(--sans); }
+  a { color: inherit; }
+  button { font: inherit; color: inherit; }
+  .mono { font-family: var(--mono); font-size: 12px; }
+  .muted { color: var(--text-muted); }
+  .secondary { color: var(--text-secondary); }
+
+  header {
+    position: sticky; top: 0; z-index: 10;
+    display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+    padding: 12px 20px; background: rgba(17,17,16,.92); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 15px; letter-spacing: .2px; }
+  .brand svg { flex: none; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--text-secondary); font-size: 12px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
+  .dot.good { background: var(--good); }
+  .dot.warning { background: var(--warning); }
+  .dot.critical { background: var(--critical); }
+  .search { margin-left: auto; display: flex; gap: 8px; flex: 1 1 320px; max-width: 520px; }
+  .search input {
+    flex: 1; min-width: 0; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface-1); color: var(--text-primary); font: 12px var(--mono);
+  }
+  .search input:focus { outline: 2px solid var(--series-1); outline-offset: -1px; }
+  .btn {
+    padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2);
+    cursor: pointer; white-space: nowrap;
+  }
+  .btn:hover { background: var(--surface-3); }
+
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 16px; padding: 16px 20px 32px; }
+  @media (max-width: 1100px) { main { grid-template-columns: minmax(0, 1fr); } }
+  .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; min-width: 0; }
+  .card > h2 {
+    margin: 0; padding: 12px 16px; font-size: 12px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--text-secondary); display: flex; align-items: center; gap: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .card > h2 .aside { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--text-muted); }
+  .card .body { padding: 12px 16px; }
+
+  /* block tree */
+  #tree-wrap { overflow-x: auto; overflow-y: hidden; padding: 8px 0 4px; }
+  #tree { display: block; }
+  .blk rect { stroke-width: 1.5; cursor: pointer; transition: filter .15s; }
+  .blk:hover rect { filter: brightness(1.25); }
+  .blk text { font: 10.5px var(--mono); fill: var(--text-primary); pointer-events: none; }
+  .blk .h { fill: var(--text-muted); font-size: 9.5px; }
+  .edge { fill: none; stroke-width: 2; }
+  .tipmark rect { fill: var(--surface-3); stroke: var(--border); }
+  .tipmark text { font: 600 10px var(--sans); fill: var(--text-primary); }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; padding: 0 16px 12px; color: var(--text-secondary); font-size: 12px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 14px; height: 10px; border-radius: 3px; display: inline-block; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-weight: 500; color: var(--text-muted); font-size: 11.5px; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 6px 8px; border-bottom: 1px solid #262624; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover td { background: var(--surface-2); }
+  tr.selected td { background: #1f2a3a; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .scroll { overflow-x: auto; }
+  .tall { max-height: 300px; overflow-y: auto; }
+  .chip-tip { display: inline-flex; align-items: center; gap: 6px; }
+
+  /* difficulty chart */
+  #diff { position: relative; }
+  #diff svg { display: block; width: 100%; height: 170px; }
+  #diff .grid { stroke: #2a2a28; stroke-width: 1; }
+  #diff .axis { fill: var(--text-muted); font: 10px var(--sans); }
+  #diff .line { fill: none; stroke: var(--series-1); stroke-width: 2; stroke-linejoin: round; }
+  #diff .cross { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; }
+  #diff .mk { fill: var(--series-1); stroke: var(--surface-1); stroke-width: 2; }
+
+  .tooltip {
+    position: fixed; z-index: 40; pointer-events: none; padding: 8px 10px; border-radius: 8px; font-size: 12px;
+    background: #0b0b0b; border: 1px solid var(--border); box-shadow: 0 6px 24px rgba(0,0,0,.45); max-width: 320px;
+  }
+  .tooltip b { font-weight: 600; }
+  .tooltip .row { display: flex; justify-content: space-between; gap: 16px; }
+
+  .events { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; }
+  .ev { display: flex; gap: 8px; align-items: baseline; }
+  .ev .t { color: var(--text-muted); font: 11px var(--mono); flex: none; }
+  .tag { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-secondary); flex: none; }
+  .tag.reorg { border-color: var(--series-2); }
+  .tag.ban { border-color: var(--critical); }
+
+  /* detail drawer */
+  #drawer {
+    position: fixed; inset: 0 0 0 auto; width: min(720px, 100vw); z-index: 30; background: var(--surface-1);
+    border-left: 1px solid var(--border); box-shadow: -12px 0 40px rgba(0,0,0,.5);
+    transform: translateX(100%); transition: transform .2s ease; display: flex; flex-direction: column;
+  }
+  #drawer.open { transform: none; }
+  #drawer .top { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+  #drawer .top h3 { margin: 0; font-size: 15px; }
+  #drawer .top .btn { margin-left: auto; }
+  #drawer .content { overflow-y: auto; padding: 16px 18px 40px; display: flex; flex-direction: column; gap: 16px; }
+  .kv { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 6px 12px; }
+  .kv dt { color: var(--text-muted); }
+  .kv dd { margin: 0; overflow-wrap: anywhere; }
+  .section-title { font-size: 11.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-secondary); margin: 4px 0 8px; }
+  .box { border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: var(--bg); }
+  .link { color: var(--series-1); cursor: pointer; text-decoration: none; }
+  .link:hover { text-decoration: underline; }
+  .status { display: inline-flex; align-items: center; gap: 6px; }
+
+  .asm { display: flex; flex-wrap: wrap; gap: 4px; }
+  .op { display: inline-block; font: 11px var(--mono); padding: 2px 7px; border-radius: 5px; background: var(--surface-3); border: 1px solid var(--border); border-left-width: 3px; }
+  .op.push { border-left-color: var(--text-muted); color: var(--text-secondary); max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  .op.crypto { border-left-color: var(--series-7); }
+  .op.flow { border-left-color: var(--series-2); }
+  .op.time { border-left-color: var(--series-4); }
+  .op.stack { border-left-color: var(--series-3); }
+  .op.bad { border-left-color: var(--critical); }
+
+  .proof { display: flex; flex-direction: column; gap: 6px; }
+  .pstep { display: grid; grid-template-columns: 70px 1fr; gap: 10px; align-items: center; }
+  .pstep .side { font-size: 11px; color: var(--text-muted); text-align: right; }
+  .hash { font: 11px var(--mono); padding: 5px 8px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); overflow-wrap: anywhere; }
+  .hash.leaf { border-color: var(--series-1); }
+  .hash.root { border-color: var(--good); }
+  .stack { display: flex; gap: 3px; flex-wrap: wrap; }
+  .stack span { font: 10.5px var(--mono); background: var(--surface-3); padding: 1px 6px; border-radius: 4px; }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #0b0b0b; border: 1px solid var(--critical); padding: 8px 14px; border-radius: 8px; z-index: 50; }
+  .empty { color: var(--text-muted); padding: 18px 0; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true">
+      <rect x="2" y="10" width="7" height="6" rx="2" fill="#3987e5"/>
+      <rect x="17" y="4" width="7" height="6" rx="2" fill="#3987e5"/>
+      <rect x="17" y="16" width="7" height="6" rx="2" fill="#d95926"/>
+      <path d="M9 13 C13 13 13 7 17 7 M9 13 C13 13 13 19 17 19" stroke="#c3c2b7" stroke-width="1.6" fill="none"/>
+    </svg>
+    forkchain <span class="muted" style="font-weight:400">explorer</span>
+  </div>
+  <span class="pill"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting…</span></span>
+  <span class="pill" id="consensus-pill"><span class="dot"></span><span>—</span></span>
+  <form class="search" id="search-form">
+    <input id="search" placeholder="block hash, height, txid or fc-address" autocomplete="off" spellcheck="false">
+    <button class="btn" type="submit">Search</button>
+  </form>
+</header>
+
+<main>
+  <div class="col">
+    <section class="card">
+      <h2>Block tree <span class="aside" id="tree-aside"></span></h2>
+      <div id="tree-wrap"><svg id="tree" role="img" aria-label="Block tree with fork branches"></svg></div>
+      <div class="legend" id="tree-legend"></div>
+    </section>
+    <section class="card">
+      <h2>Nodes <span class="aside">click a row to inspect its mempool, peers and difficulty</span></h2>
+      <div class="scroll"><table id="nodes-table">
+        <thead><tr><th>node</th><th class="num">height</th><th>tip</th><th class="num">peers</th><th class="num">mempool</th><th class="num">hashrate</th><th class="num">mined</th><th class="num">reorgs</th><th class="num">max depth</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+    <section class="card">
+      <h2>Difficulty <span class="aside" id="diff-aside"></span></h2>
+      <div class="body" id="diff"></div>
+    </section>
+  </div>
+  <div class="col">
+    <section class="card">
+      <h2>Mempool <span class="aside" id="mempool-aside"></span></h2>
+      <div class="scroll tall"><table id="mempool-table">
+        <thead><tr><th>txid</th><th class="num">fee rate</th><th class="num">fee</th><th class="num">size</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+    <section class="card">
+      <h2>Peers <span class="aside" id="peers-aside"></span></h2>
+      <div class="scroll"><table id="peers-table">
+        <thead><tr><th>peer</th><th>dir</th><th class="num">height</th><th class="num">latency</th><th class="num">score</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+    <section class="card">
+      <h2>Network events</h2>
+      <div class="body"><div class="events" id="events"></div></div>
+    </section>
+  </div>
+</main>
+
+<aside id="drawer" aria-hidden="true">
+  <div class="top"><h3 id="drawer-title">Details</h3><button class="btn" id="drawer-close">Close ✕</button></div>
+  <div class="content" id="drawer-content"></div>
+</aside>
+<div class="tooltip" id="tooltip" hidden></div>
+
+<script>
+"use strict";
+const COIN = 100_000_000;
+const BRANCH_COLORS = ["--series-2", "--series-3", "--series-4", "--series-5", "--series-6", "--series-7", "--series-8"];
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const $ = (sel) => document.querySelector(sel);
+const short = (h, n = 8) => (h ? h.slice(0, n) : "—");
+const coins = (u) => `${Number((u / COIN).toFixed(8))} FC`;
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmtInt = (n) => (n == null ? "—" : Number(n).toLocaleString("en-US"));
+
+let state = { selected: null, snapshot: null, userScrolled: false };
+let ws;
+
+// ---------------------------------------------------------------- websocket
+function connect() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => { setConn("live", "good"); if (state.selected) ws.send(JSON.stringify({ select: state.selected })); };
+  ws.onclose = () => { setConn("reconnecting…", "warning"); setTimeout(connect, 1500); };
+  ws.onmessage = (msg) => {
+    const snap = JSON.parse(msg.data);
+    if (snap.type !== "snapshot") return;
+    state.snapshot = snap;
+    state.selected = snap.selected;
+    render(snap);
+  };
+}
+function setConn(text, kind) { $("#conn-text").textContent = text; $("#conn-dot").className = `dot ${kind}`; }
+function select(name) {
+  state.selected = name;
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ select: name }));
+  if (state.snapshot) { state.snapshot.selected = name; renderNodes(state.snapshot); }
+}
+
+// ---------------------------------------------------------------- rendering
+function render(snap) {
+  const layout = layoutTree(snap.tree);
+  state.layout = layout;
+  renderConsensus(snap);
+  renderTree(snap.tree, layout);
+  renderNodes(snap);
+  renderMempool(snap.mempool);
+  renderPeers(snap);
+  renderDifficulty(snap.difficulty || []);
+  renderEvents(snap.events || []);
+}
+
+function renderConsensus(snap) {
+  const tips = new Set(Object.values(snap.tree.tips || {}));
+  const pill = $("#consensus-pill");
+  const n = snap.nodes.length;
+  if (!n) { pill.innerHTML = `<span class="dot"></span><span>no nodes</span>`; return; }
+  const agreed = tips.size === 1;
+  pill.innerHTML = agreed
+    ? `<span class="dot good"></span><span>${n} nodes agree · height ${snap.nodes[0].info.height}</span>`
+    : `<span class="dot warning"></span><span>⚠ fork: ${tips.size} competing tips across ${n} nodes</span>`;
+}
+
+/* Lane layout: the main chain (path to the heaviest tip) is lane 0. Every other block
+   continues its parent's branch if it is the parent's first off-main child, otherwise it
+   starts a new branch. Branches get the lowest lane free over their height span. */
+function layoutTree(tree) {
+  const blocks = tree.blocks || [];
+  const byHash = new Map(blocks.map((b) => [b.hash, b]));
+  const main = new Set();
+  for (let h = tree.main_tip; h && byHash.has(h); h = byHash.get(h).parent) main.add(h);
+  const branchOf = new Map();
+  const branches = [];
+  const childCount = new Map();
+  for (const b of blocks) {
+    if (main.has(b.hash)) { branchOf.set(b.hash, 0); continue; }
+    const parentBranch = branchOf.get(b.parent);
+    const siblingsSoFar = childCount.get(b.parent) || 0;
+    childCount.set(b.parent, siblingsSoFar + 1);
+    let id;
+    if (parentBranch !== undefined && parentBranch !== 0 && siblingsSoFar === 0) {
+      id = parentBranch;
+      branches[id - 1].end = b.height;
+    } else {
+      branches.push({ start: b.height, end: b.height, lane: 0 });
+      id = branches.length;
+    }
+    branchOf.set(b.hash, id);
+  }
+  const laneEnds = [];
+  branches.forEach((br) => {
+    let lane = laneEnds.findIndex((end) => end < br.start - 1);
+    if (lane === -1) { laneEnds.push(br.end); lane = laneEnds.length - 1; } else laneEnds[lane] = br.end;
+    br.lane = lane + 1;
+  });
+  const minH = blocks.length ? blocks[0].height : 0;
+  const maxH = blocks.length ? blocks[blocks.length - 1].height : 0;
+  return { byHash, main, branchOf, branches, minH, maxH, lanes: laneEnds.length + 1 };
+}
+
+function branchColor(id) {
+  if (id === 0) return css("--series-1");
+  const slot = BRANCH_COLORS[(id - 1)];
+  return slot ? css(slot) : css("--other");  // fold beyond 7 branches into gray, never cycle
+}
+
+function renderTree(tree, L) {
+  const svg = $("#tree");
+  const W = 84, H = 56, BW = 66, BH = 32, PAD = 24;
+  const blocks = tree.blocks || [];
+  const width = Math.max(PAD * 2 + (L.maxH - L.minH + 1) * W, $("#tree-wrap").clientWidth);
+  const tipCounts = {};
+  Object.entries(tree.tips || {}).forEach(([n, h]) => { (tipCounts[h] ||= []).push(n); });
+  const height = PAD + L.lanes * H + 30;
+  svg.setAttribute("width", width);
+  svg.setAttribute("height", height);
+  const pos = (b) => {
+    const id = L.branchOf.get(b.hash) ?? 0;
+    const lane = id === 0 ? 0 : L.branches[id - 1].lane;
+    return { x: PAD + (b.height - L.minH) * W, y: PAD + lane * H, id };
+  };
+  let edges = "", nodes = "", marks = "";
+  for (const b of blocks) {
+    const p = pos(b);
+    const parent = L.byHash.get(b.parent);
+    const color = branchColor(p.id);
+    if (parent) {
+      const q = pos(parent);
+      const x1 = q.x + BW, y1 = q.y + BH / 2, x2 = p.x, y2 = p.y + BH / 2, mx = (x1 + x2) / 2;
+      edges += `<path class="edge" stroke="${color}" stroke-opacity="${b.status === "active" ? 0.9 : 0.55}" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/>`;
+    }
+    const stale = b.status === "stale", invalid = b.status === "invalid";
+    const fill = stale ? css("--surface-2") : color;
+    const dash = stale ? `stroke-dasharray="4 3"` : "";
+    const stroke = invalid ? css("--critical") : color;
+    nodes += `<g class="blk" data-hash="${b.hash}" transform="translate(${p.x},${p.y})">
+      <rect width="${BW}" height="${BH}" rx="6" fill="${fill}" fill-opacity="${stale ? 1 : 0.28}" stroke="${stroke}" ${dash}/>
+      <text x="7" y="13">…${b.hash.slice(-6)}</text>
+      <text class="h" x="7" y="26">#${b.height}${stale ? " stale" : invalid ? " invalid" : ""}</text>
+    </g>`;
+    const tipNames = tipCounts[b.hash];
+    if (tipNames) {
+      const label = tipNames.join(" ");
+      const w = Math.max(BW, label.length * 6.4 + 12);
+      marks += `<g class="tipmark" transform="translate(${p.x},${p.y + BH + 4})"><rect width="${w}" height="16" rx="8"/><text x="7" y="11.5">▲ ${esc(label)}</text></g>`;
+    }
+  }
+  svg.innerHTML = edges + nodes + marks;
+  svg.querySelectorAll(".blk").forEach((g) => {
+    const b = L.byHash.get(g.dataset.hash);
+    g.addEventListener("mousemove", (e) => showTip(e, blockTip(b)));
+    g.addEventListener("mouseleave", hideTip);
+    g.addEventListener("click", () => openBlock(b.hash));
+  });
+  const wrap = $("#tree-wrap");
+  if (!state.userScrolled) wrap.scrollLeft = wrap.scrollWidth;
+  const stale = blocks.filter((b) => b.status === "stale").length;
+  $("#tree-aside").textContent = `${blocks.length} blocks shown · ${L.branches.length} side branch${L.branches.length === 1 ? "" : "es"} · ${stale} stale`;
+  let legend = `<span><i class="sw" style="background:${css("--series-1")}"></i>main chain (most work)</span>`;
+  L.branches.slice(0, BRANCH_COLORS.length).forEach((br, i) => {
+    legend += `<span><i class="sw" style="background:${branchColor(i + 1)}"></i>fork @${br.start}${br.end > br.start ? "–" + br.end : ""}</span>`;
+  });
+  legend += `<span><i class="sw" style="border:1.5px dashed var(--text-muted)"></i>stale / orphaned</span><span>▲ node tips</span>`;
+  $("#tree-legend").innerHTML = legend;
+}
+$("#tree-wrap").addEventListener("scroll", (e) => {
+  const w = e.target;
+  state.userScrolled = w.scrollLeft + w.clientWidth < w.scrollWidth - 40;
+});
+
+function blockTip(b) {
+  return `<b class="mono">${short(b.hash, 16)}…</b>
+    <div class="row"><span class="muted">height</span><span>${b.height}</span></div>
+    <div class="row"><span class="muted">status</span><span>${b.status}</span></div>
+    <div class="row"><span class="muted">miner</span><span>${esc(b.miner || "?")}</span></div>
+    <div class="row"><span class="muted">transactions</span><span>${b.ntx ?? "?"}</span></div>
+    <div class="row"><span class="muted">active on</span><span>${b.active_on.join(", ") || "none"}</span></div>
+    <div class="row"><span class="muted">seen by</span><span>${b.seen_by.join(", ")}</span></div>`;
+}
+
+function renderNodes(snap) {
+  const tbody = $("#nodes-table tbody");
+  tbody.innerHTML = snap.nodes.map((n) => {
+    const i = n.info;
+    const tipBranch = state.layout ? state.layout.branchOf.get(i.tip) ?? 0 : 0;
+    const sel = n.name === snap.selected ? "selected" : "";
+    return `<tr class="${sel}" data-name="${esc(n.name)}">
+      <td><b>${esc(n.name)}</b>${i.mining ? ' <span class="tag" title="built-in miner running">mining</span>' : ""}</td>
+      <td class="num">${i.height}</td>
+      <td><span class="chip-tip"><i class="sw" style="background:${branchColor(tipBranch)}"></i><span class="mono">${short(i.tip, 10)}</span></span></td>
+      <td class="num">${i.peers}</td>
+      <td class="num">${i.mempool}</td>
+      <td class="num">${i.hashrate ? fmtInt(Math.round(i.hashrate)) + " H/s" : "max"}</td>
+      <td class="num">${i.stats.blocks_mined}</td>
+      <td class="num">${i.stats.reorgs}</td>
+      <td class="num">${i.stats.max_reorg_depth}</td></tr>`;
+  }).join("") || `<tr><td colspan="9" class="empty">no nodes yet</td></tr>`;
+  tbody.querySelectorAll("tr[data-name]").forEach((tr) => tr.addEventListener("click", () => select(tr.dataset.name)));
+}
+
+function renderMempool(pool) {
+  const tbody = $("#mempool-table tbody");
+  if (!pool) { tbody.innerHTML = ""; return; }
+  $("#mempool-aside").textContent = `${state.selected} · ${pool.count} tx · ${fmtInt(pool.bytes)} / ${fmtInt(pool.max_bytes)} B`;
+  tbody.innerHTML = pool.entries.map((e) => `<tr data-tx="${e.txid}">
+      <td class="mono">${short(e.txid, 16)}${e.parents.length ? ' <span class="muted" title="spends an unconfirmed parent">↳</span>' : ""}</td>
+      <td class="num">${e.feerate.toFixed(2)}</td><td class="num">${fmtInt(e.fee)}</td><td class="num">${e.size}</td></tr>`).join("")
+    || `<tr><td colspan="4" class="empty">mempool is empty</td></tr>`;
+  tbody.querySelectorAll("tr[data-tx]").forEach((tr) => tr.addEventListener("click", () => openTx(tr.dataset.tx)));
+}
+
+function renderPeers(snap) {
+  const node = snap.nodes.find((n) => n.name === snap.selected);
+  const tbody = $("#peers-table tbody");
+  if (!node) { tbody.innerHTML = ""; return; }
+  $("#peers-aside").textContent = `of ${node.name}`;
+  tbody.innerHTML = node.peers.filter((p) => p.handshake).map((p) => `<tr>
+      <td><b>${esc(p.name)}</b> <span class="muted mono">${esc(p.addr)}</span></td>
+      <td>${p.inbound ? "in" : "out"}</td><td class="num">${p.height}</td>
+      <td class="num">${p.latency_ms} ms</td><td class="num">${p.score}</td></tr>`).join("")
+    || `<tr><td colspan="5" class="empty">no peers — partitioned?</td></tr>`;
+}
+
+function renderDifficulty(points) {
+  const host = $("#diff");
+  $("#diff-aside").textContent = state.selected ? `${state.selected} · last ${points.length} blocks` : "";
+  if (points.length < 2) { host.innerHTML = `<div class="empty">not enough blocks yet</div>`; return; }
+  const W = host.clientWidth - 32 || 600, H = 170, ml = 52, mr = 10, mt = 10, mb = 22;
+  const xs = points.map((p) => p.height), ys = points.map((p) => p.difficulty);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  const yMax = Math.max(...ys) * 1.1, yMin = 0;
+  const sx = (x) => ml + ((x - x0) / Math.max(1, x1 - x0)) * (W - ml - mr);
+  const sy = (y) => mt + (1 - (y - yMin) / (yMax - yMin)) * (H - mt - mb);
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((t) => yMin + t * (yMax - yMin));
+  const fmt = (v) => (v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : v >= 1e3 ? (v / 1e3).toFixed(1) + "k" : v.toFixed(0));
+  let g = ticks.map((t) => `<line class="grid" x1="${ml}" x2="${W - mr}" y1="${sy(t)}" y2="${sy(t)}"/><text class="axis" x="${ml - 6}" y="${sy(t) + 3}" text-anchor="end">${fmt(t)}</text>`).join("");
+  g += `<text class="axis" x="${ml}" y="${H - 5}">#${x0}</text><text class="axis" x="${W - mr}" y="${H - 5}" text-anchor="end">#${x1}</text>`;
+  // Step line: difficulty is constant between retargets.
+  let d = `M${sx(points[0].height)},${sy(points[0].difficulty)}`;
+  for (let i = 1; i < points.length; i++) d += ` H${sx(points[i].height)} V${sy(points[i].difficulty)}`;
+  g += `<path class="line" d="${d}"/><line class="cross" id="dx" y1="${mt}" y2="${H - mb}" visibility="hidden"/><circle class="mk" id="dm" r="4" visibility="hidden"/>`;
+  g += `<rect id="dhit" x="${ml}" y="0" width="${W - ml - mr}" height="${H}" fill="transparent"/>`;
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:${H}px">${g}</svg>`;
+  const hit = host.querySelector("#dhit"), cross = host.querySelector("#dx"), mk = host.querySelector("#dm");
+  hit.addEventListener("mousemove", (e) => {
+    const r = host.querySelector("svg").getBoundingClientRect();
+    const px = ((e.clientX - r.left) / r.width) * W;
+    let best = points[0];
+    for (const p of points) if (Math.abs(sx(p.height) - px) < Math.abs(sx(best.height) - px)) best = p;
+    cross.setAttribute("x1", sx(best.height)); cross.setAttribute("x2", sx(best.height)); cross.setAttribute("visibility", "visible");
+    mk.setAttribute("cx", sx(best.height)); mk.setAttribute("cy", sy(best.difficulty)); mk.setAttribute("visibility", "visible");
+    showTip(e, `<b>block #${best.height}</b>
+      <div class="row"><span class="muted">difficulty</span><span>${fmtInt(Math.round(best.difficulty))}</span></div>
+      <div class="row"><span class="muted">interval</span><span>${(best.interval_ms / 1000).toFixed(2)} s</span></div>`);
+  });
+  hit.addEventListener("mouseleave", () => { hideTip(); cross.setAttribute("visibility", "hidden"); mk.setAttribute("visibility", "hidden"); });
+}
+
+function renderEvents(events) {
+  const box = $("#events");
+  const clock = (ms) => new Date(ms).toLocaleTimeString("en-GB", { hour12: false });
+  const describe = (e) => {
+    if (e.type === "reorg") return `<b>${esc(e.node)}</b> reorg depth <b>${e.depth}</b> · ${e.reverted.length} tx reverted${e.dropped.length ? `, ${e.dropped.length} dropped` : ""}`;
+    if (e.type === "ban") return `<b>${esc(e.node)}</b> banned ${esc(e.peer)} — ${esc(e.reason)}`;
+    if (e.type === "peer_connected") return `<b>${esc(e.node)}</b> ↔ ${esc(e.peer)} connected`;
+    if (e.type === "peer_disconnected") return `<b>${esc(e.node)}</b> ✕ ${esc(e.peer)} disconnected`;
+    return esc(e.type);
+  };
+  const kind = (e) => (e.type === "reorg" ? "reorg" : e.type === "ban" ? "ban" : "");
+  box.innerHTML = events.slice().reverse().slice(0, 30).map((e) => `<div class="ev">
+      <span class="t">${clock(e.time)}</span><span class="tag ${kind(e)}">${e.type.replace("_", " ")}</span><span>${describe(e)}</span></div>`).join("")
+    || `<div class="empty">quiet so far</div>`;
+}
+
+// ---------------------------------------------------------------- tooltip
+function showTip(e, html) {
+  const tip = $("#tooltip");
+  tip.innerHTML = html; tip.hidden = false;
+  const pad = 14, r = tip.getBoundingClientRect();
+  let x = e.clientX + pad, y = e.clientY + pad;
+  if (x + r.width > innerWidth - 8) x = e.clientX - r.width - pad;
+  if (y + r.height > innerHeight - 8) y = e.clientY - r.height - pad;
+  tip.style.left = `${x}px`; tip.style.top = `${y}px`;
+}
+function hideTip() { $("#tooltip").hidden = true; }
+
+// ---------------------------------------------------------------- details drawer
+async function api(path) {
+  const sep = path.includes("?") ? "&" : "?";
+  const res = await fetch(`${path}${sep}node=${encodeURIComponent(state.selected || "")}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+function openDrawer(title, html) {
+  $("#drawer-title").textContent = title;
+  $("#drawer-content").innerHTML = html;
+  $("#drawer").classList.add("open");
+  $("#drawer").setAttribute("aria-hidden", "false");
+  $("#drawer-content").scrollTop = 0;
+}
+function closeDrawer() { $("#drawer").classList.remove("open"); $("#drawer").setAttribute("aria-hidden", "true"); }
+$("#drawer-close").addEventListener("click", closeDrawer);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+function toast(msg) {
+  const t = document.createElement("div"); t.className = "toast"; t.textContent = msg;
+  document.body.appendChild(t); setTimeout(() => t.remove(), 3500);
+}
+$("#drawer-content").addEventListener("click", (e) => {
+  const a = e.target.closest("[data-open]");
+  if (!a) return;
+  const [kind, ref, extra] = a.dataset.open.split(":");
+  if (kind === "block") openBlock(ref);
+  if (kind === "tx") openTx(ref);
+  if (kind === "merkle") showMerkle(ref, extra);
+  if (kind === "trace") showTrace(ref, Number(extra));
+});
+
+const statusBadge = (s) => {
+  const kind = { active: "good", mempool: "warning", stale: "", invalid: "critical", "header-only": "" }[s] ?? "";
+  return `<span class="status"><span class="dot ${kind}"></span>${esc(s)}</span>`;
+};
+
+function opClass(op) {
+  if (op.startsWith("PUSH") || op === "OP_0" || /^OP_\d+$/.test(op)) return "push";
+  if (["CHECKSIG", "CHECKSIGVERIFY", "CHECKMULTISIG", "HASH"].includes(op)) return "crypto";
+  if (["IF", "ELSE", "ENDIF", "VERIFY", "EQUALVERIFY", "EQUAL", "RETURN"].includes(op)) return "flow";
+  if (op === "CHECKLOCKTIME") return "time";
+  if (["DUP", "DROP", "SWAP"].includes(op)) return "stack";
+  return "bad";
+}
+function asm(tokens) {
+  if (!tokens || !tokens.length) return `<span class="muted">empty</span>`;
+  return `<div class="asm">${tokens.map((t) => {
+    const label = t.data ? `${esc(t.op)} ${esc(t.data.length > 24 ? t.data.slice(0, 24) + "…" : t.data)}` : esc(t.op);
+    return `<span class="op ${opClass(t.op)}" title="${esc(t.data || t.op)}">${label}</span>`;
+  }).join("")}</div>`;
+}
+
+async function openBlock(hash) {
+  try {
+    const b = await api(`/api/block/${hash}`);
+    const txRows = (b.txs || []).map((t, i) => `<tr data-open="tx:${t.txid}">
+        <td class="mono"><span class="link">${short(t.txid, 20)}…</span></td><td>${t.coinbase ? "coinbase" : ""}</td>
+        <td class="num">${coins(t.out)}</td><td class="num">${t.size} B</td>
+        <td><span class="link" data-open="merkle:${t.txid}:${b.hash}">proof</span></td></tr>`).join("");
+    openDrawer(`Block #${b.height}`, `
+      <dl class="kv">
+        <dt>hash</dt><dd class="mono">${b.hash}</dd>
+        <dt>status</dt><dd>${statusBadge(b.status)}${b.confirmations ? ` · ${b.confirmations} confirmations` : ""}</dd>
+        <dt>parent</dt><dd class="mono"><span class="link" data-open="block:${b.parent}">${b.parent}</span></dd>
+        <dt>children</dt><dd class="mono">${b.children.map((c) => `<span class="link" data-open="block:${c}">${short(c, 16)}</span>`).join("<br>") || "—"}</dd>
+        <dt>merkle root</dt><dd class="mono">${b.merkle_root}</dd>
+        <dt>timestamp</dt><dd>${new Date(b.time).toISOString().replace("T", " ").replace("Z", " UTC")}</dd>
+        <dt>bits / nonce</dt><dd class="mono">0x${b.bits.toString(16)} / ${b.nonce}</dd>
+        <dt>difficulty</dt><dd>${fmtInt(b.difficulty)}</dd>
+        <dt>chain work</dt><dd class="mono">${fmtInt(b.chainwork)}</dd>
+        <dt>miner</dt><dd>${esc(b.miner || "?")}${b.source ? ` <span class="muted">(first heard from ${esc(b.source)})</span>` : ""}</dd>
+        <dt>size</dt><dd>${fmtInt(b.size)} B · ${b.ntx} tx</dd>
+      </dl>
+      <div><div class="section-title">Transactions</div>
+        <div class="scroll"><table><thead><tr><th>txid</th><th></th><th class="num">out</th><th class="num">size</th><th>merkle</th></tr></thead>
+        <tbody>${txRows}</tbody></table></div></div>`);
+  } catch (err) { toast(err.message); }
+}
+
+async function openTx(txid) {
+  try {
+    const t = await api(`/api/tx/${txid}`);
+    const ins = t.inputs.map((i, n) => `<div class="box">
+        <div class="section-title">input ${n}${i.spent ? ` · spends ${esc(i.spent.type)}` : ""}</div>
+        <dl class="kv">
+          <dt>prevout</dt><dd class="mono">${i.prevout ? `<span class="link" data-open="tx:${i.prevout.split(":")[0]}">${short(i.prevout, 20)}…:${i.prevout.split(":")[1]}</span>` : "coinbase (new coins)"}</dd>
+          ${i.spent ? `<dt>value</dt><dd>${coins(i.spent.value)}</dd><dt>locking script</dt><dd>${asm(i.spent.asm)}</dd>` : ""}
+          <dt>unlocking script</dt><dd>${i.prevout ? asm(i.asm) : `<span class="mono muted">${short(i.script_sig, 40)}</span>`}</dd>
+        </dl>
+        ${i.prevout && i.spent ? `<div style="margin-top:10px"><span class="btn" data-open="trace:${t.txid}:${n}">▶ Run script in VM</span></div>` : ""}
+        <div id="trace-${n}"></div></div>`).join("");
+    const outs = t.outputs.map((o, n) => `<div class="box">
+        <div class="section-title">output ${n} · ${esc(o.type)}</div>
+        <dl class="kv"><dt>value</dt><dd>${coins(o.value)}</dd>
+          ${o.address ? `<dt>address</dt><dd class="mono">${o.address}</dd>` : ""}
+          <dt>locking script</dt><dd>${asm(o.asm)}</dd></dl></div>`).join("");
+    openDrawer(`Transaction`, `
+      <dl class="kv">
+        <dt>txid</dt><dd class="mono">${t.txid}</dd>
+        <dt>status</dt><dd>${statusBadge(t.status)}</dd>
+        <dt>block</dt><dd class="mono">${t.block ? `<span class="link" data-open="block:${t.block}">#${t.height} ${short(t.block, 16)}</span>` : "—"}</dd>
+        <dt>fee</dt><dd>${t.fee == null ? "—" : `${fmtInt(t.fee)} units (${(t.fee / t.size).toFixed(2)}/B)`}</dd>
+        <dt>size / locktime</dt><dd>${t.size} B / ${t.locktime}</dd>
+      </dl>
+      ${t.block ? `<div><span class="btn" data-open="merkle:${t.txid}:${t.block}">🌳 Show Merkle proof</span></div><div id="merkle-box"></div>` : ""}
+      <div><div class="section-title">Inputs</div><div class="col" style="gap:10px">${ins}</div></div>
+      <div><div class="section-title">Outputs</div><div class="col" style="gap:10px">${outs}</div></div>`);
+  } catch (err) { toast(err.message); }
+}
+
+async function showMerkle(txid, block) {
+  try {
+    const m = await api(`/api/merkle/${txid}?block=${block}`);
+    let acc = `<div class="pstep"><span class="side">leaf</span><div class="hash leaf">${m.proof.leaf}</div></div>`;
+    m.proof.steps.forEach((s, i) => {
+      acc += `<div class="pstep"><span class="side">level ${i + 1}<br>sibling ${s.side === "L" ? "← left" : "right →"}</span><div class="hash">${s.sibling}</div></div>`;
+    });
+    acc += `<div class="pstep"><span class="side">root</span><div class="hash root">${m.root}</div></div>`;
+    const html = `<div class="box"><div class="section-title">Merkle inclusion proof · leaf ${m.proof.index} of ${m.leaves}</div>
+      <div class="proof">${acc}</div>
+      <p style="margin:10px 0 0">${m.valid ? `<span class="status"><span class="dot good"></span>✓ proof folds up to the header's merkle root</span>` : `<span class="status"><span class="dot critical"></span>✕ proof does NOT match the root</span>`}
+      <span class="muted"> — ${m.proof.steps.length} hashes instead of ${m.leaves} txids</span></p></div>`;
+    const slot = $("#merkle-box");
+    if (slot) slot.innerHTML = html; else openDrawer("Merkle proof", html);
+  } catch (err) { toast(err.message); }
+}
+
+async function showTrace(txid, index) {
+  try {
+    const t = await api(`/api/trace/${txid}/${index}`);
+    const rows = t.steps.map((s, i) => `<tr>
+        <td class="num muted">${i + 1}</td><td class="muted">${s.phase}</td>
+        <td><span class="op ${opClass(s.op)}">${esc(s.op)}</span></td>
+        <td><div class="stack">${s.stack.map((x) => `<span title="${x}">${x === "" ? "∅" : esc(x.length > 10 ? x.slice(0, 10) + "…" : x)}</span>`).join("") || '<span class="muted">empty</span>'}</div></td></tr>`).join("");
+    const verdict = t.valid
+      ? `<span class="status"><span class="dot good"></span>✓ script succeeds — input is authorised</span>`
+      : `<span class="status"><span class="dot critical"></span>✕ ${esc(t.error)}</span>`;
+    $(`#trace-${index}`).innerHTML = `<div style="margin-top:12px"><div class="section-title">VM trace · ${esc(t.type)}</div>
+      <div class="scroll"><table><thead><tr><th class="num">#</th><th>phase</th><th>op</th><th>stack after (top →)</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p style="margin:8px 0 0">${verdict}</p></div>`;
+  } catch (err) { toast(err.message); }
+}
+
+$("#search-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const q = $("#search").value.trim();
+  if (!q) return;
+  try {
+    const r = await api(`/api/search?q=${encodeURIComponent(q)}`);
+    if (r.kind === "block") openBlock(r.result.hash);
+    else if (r.kind === "tx") openTx(r.result.txid);
+    else if (r.kind === "address") {
+      const a = r.result;
+      openDrawer("Address", `<dl class="kv"><dt>address</dt><dd class="mono">${a.address}</dd>
+        <dt>spendable</dt><dd>${coins(a.spendable)}</dd><dt>immature</dt><dd>${coins(a.immature)}</dd>
+        <dt>unconfirmed in</dt><dd>${coins(a.unconfirmed_incoming)}</dd></dl>
+        <div class="scroll"><table><thead><tr><th>coin</th><th class="num">value</th><th class="num">height</th><th></th></tr></thead><tbody>
+        ${a.coins.map((c) => `<tr data-open="tx:${c.txid}"><td class="mono"><span class="link">${short(c.txid, 16)}…:${c.index}</span></td><td class="num">${coins(c.value)}</td><td class="num">${c.height}</td><td>${c.coinbase ? "coinbase" : ""}${c.mature ? "" : " · immature"}</td></tr>`).join("")}
+        </tbody></table></div>`);
+    }
+  } catch (err) { toast(err.message); }
+});
+
+addEventListener("resize", () => state.snapshot && render(state.snapshot));
+connect();
+</script>
+</body>
+</html>

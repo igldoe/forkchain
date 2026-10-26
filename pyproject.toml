@@ -69,6 +69,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "-q"
 markers = ["slow: network/simulation tests that take a few seconds"]
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]
 
 [tool.coverage.run]
 source = ["forkchain"]

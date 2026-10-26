@@ -160,11 +160,7 @@ class Simulation:
 
     async def run(self) -> SimReport:
         await self.start()
-        self._running = True
-        background = [
-            asyncio.create_task(self._tx_generator()),
-            asyncio.create_task(self._sampler()),
-        ]
+        background = self.start_background()
         try:
             if self.cfg.attack:
                 await self._run_attack()
@@ -182,18 +178,31 @@ class Simulation:
                 task.cancel()
             await self.stop()
 
-    async def _run_partition(self, start: float, end: float) -> None:
-        await asyncio.sleep(max(0.0, start - self.now))
+    def start_background(self) -> list[asyncio.Task[None]]:
+        """Random payments and the convergence sampler (also used by the explorer demo)."""
+        self._running = True
+        return [
+            asyncio.create_task(self._tx_generator()),
+            asyncio.create_task(self._sampler()),
+        ]
+
+    def partition(self, groups: list[list[str]] | None = None) -> None:
         names = self.cfg.names()
-        groups = self.cfg.groups or [names[: len(names) // 2], names[len(names) // 2 :]]
+        groups = groups or self.cfg.groups or [names[: len(names) // 2], names[len(names) // 2 :]]
         self.policy.split(*groups)
+        self._heal_at = None
+        self.convergence_after_heal = None
         for node in self.nodes:
             node.apply_policy()
         self.note(f"partition: {self.policy.describe()}")
-        await asyncio.sleep(max(0.0, end - self.now))
-        self._heal()
 
-    def _heal(self) -> None:
+    async def _run_partition(self, start: float, end: float) -> None:
+        await asyncio.sleep(max(0.0, start - self.now))
+        self.partition()
+        await asyncio.sleep(max(0.0, end - self.now))
+        self.heal()
+
+    def heal(self) -> None:
         self.policy.heal()
         self._heal_at = self.now
         for node in self.nodes:
@@ -205,7 +214,7 @@ class Simulation:
         for node in self.nodes:
             node.mining = False
         if self.policy.partitions is not None:
-            self._heal()
+            self.heal()
         started = self.now
         deadline = time.monotonic() + self.cfg.settle_timeout
         while time.monotonic() < deadline:
@@ -315,7 +324,7 @@ class Simulation:
             f"attack: merchant saw {max_conf} confirmation(s); releasing private chain "
             f"({private_blocks} blocks)"
         )
-        self._heal()
+        self.heal()
         await asyncio.sleep(3.0)
         final = watcher.chain.find_tx(pay_merchant.txid)
         merchant_paid = final is not None and watcher.chain.contains(final[1].hash)

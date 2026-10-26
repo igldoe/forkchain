@@ -234,13 +234,62 @@ async def run_sim(args: argparse.Namespace) -> None:
         seed=args.seed,
     )
     log = None if args.quiet or args.json else (lambda msg: print(msg, flush=True))
-    report = await Simulation(config, log=log).run()
+    sim = Simulation(config, log=log)
+    explorer = None
+    if args.explorer_port:
+        from forkchain.explorer.app import LocalSource, create_app, serve
+
+        app = create_app(LocalSource(lambda: sim.nodes))
+        explorer = asyncio.create_task(serve(app, args.explorer_host, args.explorer_port))
+        print(f"explorer: http://{args.explorer_host}:{args.explorer_port}", flush=True)
+    try:
+        report = await sim.run()
+    finally:
+        if explorer is not None:
+            explorer.cancel()
     if args.json:
         import json
 
         print(json.dumps(report.to_json(), indent=2))
     else:
         print(report.render())
+
+
+# -- explorer --------------------------------------------------------------------------------
+
+
+async def run_explorer(args: argparse.Namespace) -> None:
+    from forkchain.explorer.app import LocalSource, RpcSource, Source, chaos_loop, create_app, serve
+
+    print(f"{DISCLAIMER}\nexplorer: http://{args.host}:{args.port}", flush=True)
+    if not args.demo:
+        source: Source = RpcSource(args.rpc or ["127.0.0.1:8332"])
+        await serve(create_app(source), args.host, args.port)
+        return
+    # Demo: an endless in-process simulation that keeps splitting and healing the network.
+    from forkchain.sim.runner import SimConfig, Simulation
+
+    sim = Simulation(
+        SimConfig(
+            nodes=args.nodes,
+            block_time=args.block_time,
+            whales=1,
+            whale_factor=2.0,
+            partition=None,
+            tx_rate=3.0,
+            latency_ms=60,
+            jitter_ms=60,
+        ),
+        log=lambda msg: print(msg, flush=True),
+    )
+    await sim.start()
+    tasks = [*sim.start_background(), asyncio.create_task(chaos_loop(sim))]
+    try:
+        await serve(create_app(LocalSource(lambda: sim.nodes)), args.host, args.port)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await sim.stop()
 
 
 # -- argument parsing ------------------------------------------------------------------------
@@ -312,7 +361,18 @@ def build_parser() -> argparse.ArgumentParser:
     sim.add_argument("--seed", type=int, default=1)
     sim.add_argument("--json", action="store_true", help="print the report as JSON")
     sim.add_argument("--quiet", action="store_true")
+    sim.add_argument("--explorer-port", type=int, default=0, help="serve the live explorer")
+    sim.add_argument("--explorer-host", default="127.0.0.1")
     sim.set_defaults(handler=run_sim, is_async=True)
+
+    explorer = sub.add_parser("explorer", help="live web explorer for one or more nodes")
+    explorer.add_argument("--rpc", action="append", metavar="HOST:PORT", help="node RPC (repeat)")
+    explorer.add_argument("--host", default="127.0.0.1")
+    explorer.add_argument("--port", type=int, default=8080)
+    explorer.add_argument("--demo", action="store_true", help="watch a built-in chaotic network")
+    explorer.add_argument("--nodes", type=int, default=5, help="demo: number of nodes")
+    explorer.add_argument("--block-time", type=float, default=1.5, help="demo: target seconds")
+    explorer.set_defaults(handler=run_explorer, is_async=True)
 
     return parser
 
