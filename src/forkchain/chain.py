@@ -74,7 +74,13 @@ class ChainUpdate:
 
     @property
     def reorg_depth(self) -> int:
-        return len(self.disconnected)
+        """Blocks that left the active chain for good.
+
+        A failed reorg attempt disconnects blocks and then reconnects them; those cancel
+        out, so an aborted switch to an invalid branch has depth 0.
+        """
+        connected = {b.hash for b in self.connected}
+        return len({b.hash for b in self.disconnected} - connected)
 
     def merge(self, other: ChainUpdate) -> None:
         self.connected += other.connected
