@@ -210,19 +210,35 @@ class Simulation:
         self.note("network healed")
 
     async def _settle(self) -> float | None:
-        """Stop mining and wait until every node agrees on the tip."""
+        """Stop mining and wait until every node agrees on the tip.
+
+        Two tips with exactly equal work are a stable state: first-seen keeps every node
+        on its own block. Real networks break such ties with the next block, so if nodes
+        still disagree after a short while, the strongest node mines until they agree.
+        """
         for node in self.nodes:
             node.mining = False
         if self.policy.partitions is not None:
             self.heal()
+        tie_breaker = max(self.nodes, key=lambda n: n.hashrate or 0.0)
         started = self.now
         deadline = time.monotonic() + self.cfg.settle_timeout
-        while time.monotonic() < deadline:
-            if self.converged():
-                elapsed = self.now - started
-                self.note(f"all nodes agree on height {self.nodes[0].chain.height}")
-                return elapsed
-            await asyncio.sleep(0.05)
+        try:
+            while time.monotonic() < deadline:
+                if self.converged():
+                    elapsed = self.now - started
+                    tie_breaker.mining = False
+                    await asyncio.sleep(0.5)  # a block found just before may still be in flight
+                    if self.converged():
+                        self.note(f"all nodes agree on height {self.nodes[0].chain.height}")
+                        return elapsed
+                    continue
+                if self.now - started > 2.0 and not tie_breaker.mining:
+                    tie_breaker.mining = True
+                    self.note(f"equal-work tips persist; {tie_breaker.name} mines a tie-breaker")
+                await asyncio.sleep(0.05)
+        finally:
+            tie_breaker.mining = False
         self.note("network did NOT converge before the settle timeout")
         return None
 
