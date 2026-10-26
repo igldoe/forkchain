@@ -10,11 +10,10 @@ from typing import Any
 
 from forkchain.block import Block
 from forkchain.chain import BlockIndex
-from forkchain.encoding import DecodeError, Reader
 from forkchain.errors import ForkchainError, MissingDataError, ValidationError
 from forkchain.keys import hash_from_address
 from forkchain.merkle import merkle_proof, merkle_root, verify_proof
-from forkchain.miner import build_template
+from forkchain.miner import build_template, coinbase_tag
 from forkchain.p2p.node import Node
 from forkchain.pow import bits_to_target, difficulty
 from forkchain.script.templates import address_of, classify, disassemble, p2pkh
@@ -84,15 +83,6 @@ class NodeAPI:
             return "header-only"
         return "stale"
 
-    def _miner(self, block: Block) -> str:
-        # Coinbase scriptSig = varint(height) + extra; the built-in miner puts its name there.
-        reader = Reader(block.txs[0].inputs[0].script_sig)
-        try:
-            reader.varint()
-        except DecodeError:
-            return ""
-        return reader.raw(reader.remaining).decode("utf-8", errors="replace")[:32]
-
     def _block_summary(self, idx: BlockIndex) -> JSON:
         block = self.chain.blocks.get(idx.hash)
         meta = self.node.block_meta.get(idx.hash, {})
@@ -106,7 +96,7 @@ class NodeAPI:
             "difficulty": round(difficulty(idx.header.bits, self.chain.params), 3),
             "chainwork": idx.chainwork,
             "ntx": len(block.txs) if block else None,
-            "miner": self._miner(block) if block else None,
+            "miner": coinbase_tag(block) if block else None,
             "source": meta.get("source"),
             "received": meta.get("received"),
             "seq": idx.seq,

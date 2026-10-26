@@ -6,6 +6,7 @@ from collections.abc import Sequence
 
 from forkchain.block import Block, BlockHeader, mine_header
 from forkchain.chain import BlockIndex, Chain
+from forkchain.encoding import DecodeError, Reader
 from forkchain.merkle import merkle_root
 from forkchain.tx import Transaction, TxOut, make_coinbase
 
@@ -38,6 +39,16 @@ def build_template(
         bits=chain.next_bits(parent),
     )
     return Block(header, all_txs)
+
+
+def coinbase_tag(block: Block) -> str:
+    """The free-form ``extra`` bytes after the height in the coinbase (miner's name)."""
+    reader = Reader(block.txs[0].inputs[0].script_sig)
+    try:
+        reader.varint()
+    except DecodeError:
+        return ""
+    return reader.raw(reader.remaining).decode("utf-8", errors="replace")[:32]
 
 
 def solve(block: Block) -> Block:

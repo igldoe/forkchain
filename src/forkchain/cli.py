@@ -188,6 +188,61 @@ async def run_miner(args: argparse.Namespace) -> None:
         await client.close()
 
 
+# -- simulator -------------------------------------------------------------------------------
+
+
+def parse_window(text: str) -> tuple[float, float] | None:
+    if text.lower() in ("none", "off", "no"):
+        return None
+    start, sep, end = text.partition(":")
+    try:
+        window = (float(start), float(end))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"expected START:END seconds, got {text!r}") from exc
+    if not sep or window[0] >= window[1]:
+        raise argparse.ArgumentTypeError("partition window must be START:END with START < END")
+    return window
+
+
+def parse_slow(text: str) -> tuple[str, float]:
+    name, sep, ms = text.partition(":")
+    if not sep:
+        raise argparse.ArgumentTypeError(f"expected NODE:MS, got {text!r}")
+    return name, float(ms)
+
+
+async def run_sim(args: argparse.Namespace) -> None:
+    from forkchain.sim.runner import SimConfig, Simulation
+
+    groups = [g.split(",") for g in args.groups.split("|")] if args.groups else None
+    config = SimConfig(
+        nodes=args.nodes,
+        duration=args.duration,
+        block_time=args.block_time,
+        hashrate=args.hashrate,
+        whales=args.whales,
+        whale_factor=args.whale_factor,
+        latency_ms=args.latency,
+        jitter_ms=args.jitter,
+        slow=dict(args.slow),
+        partition=args.partition,
+        groups=groups,
+        attack=args.attack,
+        attack_start=args.attack_start,
+        attack_confirmations=args.confirmations,
+        tx_rate=args.tx_rate,
+        seed=args.seed,
+    )
+    log = None if args.quiet or args.json else (lambda msg: print(msg, flush=True))
+    report = await Simulation(config, log=log).run()
+    if args.json:
+        import json
+
+        print(json.dumps(report.to_json(), indent=2))
+    else:
+        print(report.render())
+
+
 # -- argument parsing ------------------------------------------------------------------------
 
 
@@ -235,6 +290,29 @@ def build_parser() -> argparse.ArgumentParser:
     mine.add_argument("--hashrate", type=float, default=None)
     mine.add_argument("--refresh", type=float, default=5.0, help="seconds per template")
     mine.set_defaults(handler=run_miner, is_async=True)
+
+    sim = sub.add_parser("sim", help="chaos simulation: N nodes in one process with faults")
+    sim.add_argument("--nodes", type=int, default=5)
+    sim.add_argument("--duration", type=float, default=40.0, help="seconds of mining")
+    sim.add_argument("--block-time", type=float, default=1.0)
+    sim.add_argument("--hashrate", type=float, default=4000.0, help="per ordinary node, H/s")
+    sim.add_argument("--whales", type=int, default=0, help="nodes with boosted hashrate")
+    sim.add_argument("--whale-factor", type=float, default=4.0)
+    sim.add_argument("--latency", type=float, default=40.0, help="base one-way latency, ms")
+    sim.add_argument("--jitter", type=float, default=30.0, help="random extra latency, ms")
+    sim.add_argument("--slow", type=parse_slow, action="append", default=[], metavar="NODE:MS")
+    sim.add_argument(
+        "--partition", type=parse_window, default=(10.0, 25.0), metavar="START:END|none"
+    )
+    sim.add_argument("--groups", default=None, help='partition groups, e.g. "n0,n1|n2,n3,n4"')
+    sim.add_argument("--attack", action="store_true", help="51%% double spend by n0")
+    sim.add_argument("--attack-start", type=float, default=10.0)
+    sim.add_argument("--confirmations", type=int, default=2)
+    sim.add_argument("--tx-rate", type=float, default=2.0, help="random payments per second")
+    sim.add_argument("--seed", type=int, default=1)
+    sim.add_argument("--json", action="store_true", help="print the report as JSON")
+    sim.add_argument("--quiet", action="store_true")
+    sim.set_defaults(handler=run_sim, is_async=True)
 
     return parser
 

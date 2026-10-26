@@ -88,6 +88,7 @@ class NodeStats:
     txs_dropped: int = 0
     bans: int = 0
     invalid_messages: int = 0
+    hashes: int = 0
 
 
 Event = dict[str, Any]
@@ -206,6 +207,21 @@ class Node:
 
     def _link_allowed(self, other: str) -> bool:
         return self.policy is None or self.policy.allowed(self.name, other)
+
+    def apply_policy(self) -> int:
+        """Drop connections the link policy no longer allows (e.g. a new partition)."""
+        dropped = 0
+        for peer in list(self.peers.values()):
+            if peer.handshake_done and not self._link_allowed(peer.info.name):
+                peer.close()
+                dropped += 1
+        return dropped
+
+    def reconnect_known(self) -> None:
+        """Dial every known address right away instead of waiting for maintenance."""
+        connected = {p.listen_addr for p in self.peers.values()}
+        for addr in self.known_addrs - connected:
+            self._spawn(self.connect(*addr), "connect")
 
     def _latency_for(self, peer: Peer) -> float:
         if self.policy is None or not peer.info.name:
@@ -641,9 +657,12 @@ class Node:
         that many hashes per second. That is how the simulator gives one node 10x the
         "hash power" of another while they all share a single CPU.
         """
+        pace_start = time.monotonic()
+        paced_hashes = 0
         while self._running:
             if not self.mining or self.config.miner_script is None:
                 await asyncio.sleep(0.1)
+                pace_start, paced_hashes = time.monotonic(), 0
                 continue
             template = self._template()
             tip = self.chain.tip
@@ -660,13 +679,23 @@ class Node:
                 batch = max(1, int(rate * 0.02)) if rate else 5_000
                 solved = mine_header(template.header, nonce, batch)
                 nonce += batch
+                self.stats.hashes += batch
+                paced_hashes += batch
                 if solved is not None:
                     self.stats.blocks_mined += 1
                     block = Block(solved, template.txs)
                     self.emit("mined", hash=block.hash.hex(), height=tip.height + 1)
                     self.process_block(block, None)
                     break
-                await asyncio.sleep(batch / rate if rate else 0)
+                if not rate:
+                    await asyncio.sleep(0)
+                    continue
+                # Pace against a running budget rather than sleeping batch/rate each time:
+                # event-loop overhead would otherwise silently lower the real hashrate.
+                ahead = paced_hashes / rate - (time.monotonic() - pace_start)
+                if ahead < -1.0:  # fell far behind (busy loop): forget the debt, no bursts
+                    pace_start, paced_hashes = time.monotonic(), 0
+                await asyncio.sleep(max(0.0, ahead))
 
     # -- introspection ---------------------------------------------------------------------
 
