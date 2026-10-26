@@ -17,7 +17,7 @@ from forkchain.keys import PrivateKey
 from forkchain.miner import coinbase_tag
 from forkchain.p2p.node import Event, Node, NodeConfig
 from forkchain.params import MAIN, ConsensusParams
-from forkchain.pow import difficulty, target_to_bits
+from forkchain.pow import block_work, difficulty, target_to_bits
 from forkchain.sim.policy import ChaosPolicy
 from forkchain.sim.report import AttackReport, NodeReport, SimReport
 from forkchain.tx import OutPoint, TxOut
@@ -332,8 +332,11 @@ class Simulation:
             if found and watcher.chain.contains(found[1].hash):
                 conf = watcher.chain.height - found[1].height + 1
             max_conf = max(max_conf, conf)
-            heavier = attacker.chain.tip.chainwork > max(n.chain.tip.chainwork for n in honest)
-            if max_conf >= self.cfg.attack_confirmations and heavier and conf > 0:
+            # Release only with a margin of ~2 blocks of work: with a one-block lead, an
+            # honest block in flight turns it into an equal-work tie the attacker may lose.
+            lead = attacker.chain.tip.chainwork - max(n.chain.tip.chainwork for n in honest)
+            ahead = lead >= 2 * block_work(attacker.chain.tip.header.bits)
+            if max_conf >= self.cfg.attack_confirmations and ahead and conf > 0:
                 break
         private_blocks = attacker.chain.height - fork_height
         self.note(
@@ -341,7 +344,10 @@ class Simulation:
             f"({private_blocks} blocks)"
         )
         self.heal()
-        await asyncio.sleep(3.0)
+        for _ in range(100):  # up to 5 s for the merchant to adopt the released chain
+            if watcher.chain.tip.hash == attacker.chain.tip.hash:
+                break
+            await asyncio.sleep(0.05)
         final = watcher.chain.find_tx(pay_merchant.txid)
         merchant_paid = final is not None and watcher.chain.contains(final[1].hash)
         self_paid_tx = watcher.chain.find_tx(pay_self.txid)
