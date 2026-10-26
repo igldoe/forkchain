@@ -4,12 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from forkchain.crypto import hash160
 from forkchain.errors import MissingDataError, ValidationError
-from forkchain.keys import PublicKey
 from forkchain.params import ConsensusParams
-from forkchain.script.opcodes import tokenize
-from forkchain.script.templates import p2pkh
+from forkchain.script.vm import verify_input
 from forkchain.tx import OutPoint, Transaction, TxOut
 from forkchain.utxo import UtxoView
 
@@ -22,24 +19,6 @@ class MissingInputsError(MissingDataError):
         self.outpoint = outpoint
 
 
-def verify_p2pkh(tx: Transaction, index: int, spent: TxOut) -> bool:
-    """Signature check for pay-to-pubkey-hash outputs."""
-    try:
-        tokens = list(tokenize(tx.inputs[index].script_sig))
-    except ValueError:
-        return False
-    if len(tokens) != 2 or tokens[0].data is None or tokens[1].data is None:
-        return False
-    signature, raw_pub = tokens[0].data, tokens[1].data
-    if spent.script_pubkey != p2pkh(hash160(raw_pub)):
-        return False
-    try:
-        pubkey = PublicKey(raw_pub)
-    except ValueError:
-        return False
-    return pubkey.verify(signature, tx.sighash(index, spent.script_pubkey, spent.value))
-
-
 def is_final(tx: Transaction, height: int) -> bool:
     """A transaction may only be mined at a height >= its locktime."""
     return tx.locktime <= height
@@ -50,7 +29,7 @@ def check_tx_inputs(
     view: UtxoView,
     spend_height: int,
     params: ConsensusParams,
-    verifier: ScriptVerifier = verify_p2pkh,
+    verifier: ScriptVerifier = verify_input,
 ) -> int:
     """Validate a non-coinbase transaction spending from ``view``; return its fee.
 

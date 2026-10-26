@@ -8,8 +8,9 @@ from forkchain.merkle import merkle_root
 from forkchain.miner import build_template, mine_block, solve
 from forkchain.params import COIN, REGTEST
 from forkchain.pow import bits_to_target
+from forkchain.script.vm import verify_input
 from forkchain.tx import OutPoint, Transaction, TxIn, TxOut, make_coinbase
-from forkchain.validation import check_tx_inputs, verify_p2pkh
+from forkchain.validation import check_tx_inputs
 from forkchain.wallet import Wallet
 
 from .conftest import ChainHarness
@@ -78,10 +79,10 @@ def test_forged_signature_rejected(harness: ChainHarness, alice: Wallet, bob: Wa
     tx = alice.build_payment(coins, [TxOut(COIN, bob.script_pubkey)], fee=0)
     # Bob re-signs Alice's coin with his own key: pubkey hash does not match the output.
     stolen = bob.build_payment(coins, [TxOut(COIN, bob.script_pubkey)], fee=0)
-    assert not verify_p2pkh(stolen, 0, coins[0][1].output)
+    assert not verify_input(stolen, 0, coins[0][1].output)
     # Changing an output after signing invalidates the signature.
     tampered = replace(tx, outputs=(TxOut(COIN // 2, bob.script_pubkey), *tx.outputs[1:]))
-    assert not verify_p2pkh(tampered, 0, coins[0][1].output)
+    assert not verify_input(tampered, 0, coins[0][1].output)
     with pytest.raises(ValidationError, match="bad-txns-script"):
         check_tx_inputs(tampered, harness.chain.utxos, 3, REGTEST)
 
@@ -91,7 +92,7 @@ def test_malformed_script_sig_rejected(harness: ChainHarness, alice: Wallet) -> 
     op, coin = harness.chain.utxos.coins_for_script(alice.script_pubkey)[0]
     for script_sig in (b"", b"\x05ab", b"\x01a\x01b\x01c", b"\x02ab\x03xyz"):
         tx = Transaction((TxIn(op, script_sig),), (TxOut(1, b""),))
-        assert not verify_p2pkh(tx, 0, coin.output)
+        assert not verify_input(tx, 0, coin.output)
 
 
 def test_overspend_and_coinbase_amount(harness: ChainHarness, alice: Wallet, bob: Wallet) -> None:

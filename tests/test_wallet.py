@@ -6,9 +6,9 @@ import pytest
 
 from forkchain.errors import ForkchainError
 from forkchain.params import COIN
+from forkchain.script.vm import verify_input
 from forkchain.tx import OutPoint, TxOut
 from forkchain.utxo import Coin
-from forkchain.validation import verify_p2pkh
 from forkchain.wallet import InsufficientFundsError, Wallet
 
 
@@ -49,7 +49,7 @@ def test_build_payment_selects_largest_first_and_adds_change(alice: Wallet, bob:
     assert tx.outputs[1] == TxOut(COIN - 100, alice.script_pubkey)
     spent = dict(coins)
     for i, txin in enumerate(tx.inputs):
-        assert verify_p2pkh(tx, i, spent[txin.prevout].output)
+        assert verify_input(tx, i, spent[txin.prevout].output)
 
 
 def test_exact_amount_has_no_change(alice: Wallet, bob: Wallet) -> None:
