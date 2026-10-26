@@ -82,12 +82,23 @@ class UtxoSet:
         return undo
 
     def undo_block(self, block: Block, undo: BlockUndo) -> None:
-        """Exactly reverse ``apply_block``: remove created coins, restore spent ones."""
+        """Exactly reverse ``apply_block``, one transaction at a time, last one first.
+
+        Each transaction's outputs are removed *before* its inputs are restored. Doing all
+        removals first would break on a block where a later tx spends an earlier tx's
+        output: that output is already gone from the set.
+        """
+        spent = list(undo.spent)
         for tx in reversed(block.txs):
             for index in range(len(tx.outputs)):
                 self.spend(OutPoint(tx.txid, index))
-        for outpoint, coin in reversed(undo.spent):
-            self.add(outpoint, coin)
+            if tx.is_coinbase:
+                continue
+            for _ in tx.inputs:
+                outpoint, coin = spent.pop()
+                self.add(outpoint, coin)
+        if spent:
+            raise ValueError("undo data does not match block")
 
 
 class OverlayView:

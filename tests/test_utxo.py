@@ -42,3 +42,24 @@ def test_overlay_does_not_touch_base() -> None:
     assert view.get(op) is None
     assert view.get(OutPoint(tx.txid, 0)) is not None
     assert base.get(op) is not None
+
+
+def test_undo_block_with_intra_block_spend_chain() -> None:
+    """Regression: a block where tx2 spends tx1's output must disconnect cleanly.
+
+    Found by the chaos simulator: undo used to remove every created output first, but
+    tx1's second output had already been consumed inside the same block.
+    """
+    from forkchain.block import Block, BlockHeader
+
+    utxos = UtxoSet()
+    funding = make_coinbase(1, (TxOut(50, b"a"),))
+    utxos.apply_tx(funding, 1)
+    before = dict(utxos)
+    tx1 = Transaction((TxIn(OutPoint(funding.txid, 0)),), (TxOut(20, b"b"), TxOut(30, b"a")))
+    tx2 = Transaction((TxIn(OutPoint(tx1.txid, 1)),), (TxOut(30, b"c"),))
+    cb = make_coinbase(2, (TxOut(50, b"m"),))
+    block = Block(BlockHeader(bytes(32), bytes(32), 0, 0), (cb, tx1, tx2))
+    undo = utxos.apply_block(block, 2)
+    utxos.undo_block(block, undo)
+    assert dict(utxos) == before

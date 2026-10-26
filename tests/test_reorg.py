@@ -15,7 +15,8 @@ from forkchain.mempool import Mempool
 from forkchain.miner import mine_block
 from forkchain.params import COIN, REGTEST, ConsensusParams
 from forkchain.pow import block_work
-from forkchain.tx import Transaction, TxOut
+from forkchain.tx import OutPoint, Transaction, TxOut
+from forkchain.utxo import Coin
 from forkchain.wallet import Wallet
 
 from .conftest import FakeClock, wallet
@@ -357,3 +358,33 @@ def test_random_forks_converge_to_replayable_state(ops: list[tuple[int, int]]) -
     assert chain.utxos.total_value() == sum(
         REGTEST.block_reward(h) for h in range(1, chain.height + 1)
     )
+
+
+def test_reorg_away_block_with_unconfirmed_chain() -> None:
+    """Regression (found by the simulator): disconnecting a block that contains a parent
+    and a child spending it must restore the exact previous UTXO set."""
+    chain = new_chain()
+    alice, bob = wallet("alice"), wallet("bob")
+    base = extend(chain, chain.genesis, 2, alice.script_pubkey, tag=b"base")
+    snapshot = utxo_snapshot(chain)
+    pool = Mempool(chain, clock=chain.clock)
+    coin = chain.utxos.coins_for_script(alice.script_pubkey)[0]
+    parent = alice.build_payment([coin], [TxOut(COIN, bob.script_pubkey)], fee=1000)
+    change = (OutPoint(parent.txid, 1), Coin(parent.outputs[1], 0, False))
+    child = alice.build_payment([change], [TxOut(COIN, bob.script_pubkey)], fee=1000)
+    pool.accept(parent)
+    pool.accept(child)
+    txs, fees = pool.select(10**6)
+    assert [t.txid for t in txs] == [parent.txid, child.txid]
+    fork = chain.index[base[-1].hash]
+    block = mine_block(chain, alice.script_pubkey, txs, fees=fees, parent=fork, extra=b"A")
+    chain.add_block(block).check()
+    pool.block_connected(block)
+
+    other = extend(chain, fork, 2, alice.script_pubkey, tag=b"B")
+    assert chain.tip.hash == other[-1].hash
+    assert utxo_snapshot(chain) == utxo_snapshot(replay(chain))
+    # Rewinding further, down to the fork point, gives back the pre-fork state.
+    for _ in range(2):
+        chain._disconnect_tip()
+    assert utxo_snapshot(chain) == snapshot

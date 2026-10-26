@@ -497,7 +497,10 @@ class Node:
             self._send_getheaders(peer, start=headers[-1].hash)
 
     def _on_block(self, peer: Peer, payload: Payload) -> None:
-        block = Block.deserialize(hex_field(payload, "block"))
+        try:
+            block = Block.deserialize(hex_field(payload, "block"))
+        except ValueError as exc:
+            raise ProtocolError(f"undecodable block: {exc}") from exc
         peer.known_blocks.add(block.hash)
         self.stats.blocks_received += 1
         self.process_block(block, peer)
@@ -557,6 +560,11 @@ class Node:
             log.info("%s rejected block %s: %s", self.name, block.hash.hex()[:16], exc)
             if exc.ban:
                 self._punish(source, 100, f"invalid block: {exc}")
+            return None
+        except Exception:
+            # A bug on our side is not the peer's fault: never turn it into a ban.
+            log.exception("%s: internal error processing block %s", self.name, block.hash.hex())
+            self.emit("internal_error", hash=block.hash.hex())
             return None
         if result.status == "duplicate":
             return result
