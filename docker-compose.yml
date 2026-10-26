@@ -1,0 +1,60 @@
+# Five mining nodes plus the live explorer:  docker compose up --build
+# then open http://localhost:8080
+#
+# Educational network only. RPC ports are reachable inside the compose network (the
+# explorer needs them) but are not published to the host.
+
+x-node: &node
+  build: .
+  image: forkchain:latest
+  entrypoint: ["node-entrypoint"]
+  restart: unless-stopped
+
+services:
+  node1:
+    <<: *node
+    environment: { NODE_NAME: node1, HASHRATE: "40000" }
+    command: ["--peer", "node2:8333", "--peer", "node3:8333"]
+    volumes: ["node1:/data"]
+  node2:
+    <<: *node
+    environment: { NODE_NAME: node2 }
+    command: ["--peer", "node3:8333", "--peer", "node4:8333"]
+    volumes: ["node2:/data"]
+  node3:
+    <<: *node
+    environment: { NODE_NAME: node3 }
+    command: ["--peer", "node4:8333", "--peer", "node5:8333"]
+    volumes: ["node3:/data"]
+  node4:
+    <<: *node
+    environment: { NODE_NAME: node4 }
+    command: ["--peer", "node5:8333", "--peer", "node1:8333"]
+    volumes: ["node4:/data"]
+  node5:
+    <<: *node
+    environment: { NODE_NAME: node5 }
+    command: ["--peer", "node1:8333", "--peer", "node2:8333"]
+    volumes: ["node5:/data"]
+
+  explorer:
+    image: forkchain:latest
+    depends_on: [node1, node2, node3, node4, node5]
+    command:
+      - explorer
+      - --host=0.0.0.0
+      - --port=8080
+      - --rpc=node1:8332
+      - --rpc=node2:8332
+      - --rpc=node3:8332
+      - --rpc=node4:8332
+      - --rpc=node5:8332
+    ports: ["8080:8080"]
+    restart: unless-stopped
+
+volumes:
+  node1:
+  node2:
+  node3:
+  node4:
+  node5:
