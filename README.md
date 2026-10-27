@@ -1,5 +1,9 @@
 # forkchain
 
+[![CI](https://github.com/igldoe/forkchain/actions/workflows/ci.yml/badge.svg)](https://github.com/igldoe/forkchain/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 **A from-scratch proof-of-work blockchain in Python: UTXO, a Bitcoin-Script-like VM,
 an asyncio P2P network, a chaos simulator and a live explorer that shows forks as they happen.**
 
