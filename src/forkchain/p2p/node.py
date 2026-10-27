@@ -158,8 +158,10 @@ class Node:
             await peer.wait_closed()
         self.peers.clear()
         if self._server is not None:
+            # Since Python 3.12 this waits for all accepted connections; don't let a
+            # half-open inbound socket hang shutdown.
             with contextlib.suppress(Exception):
-                await self._server.wait_closed()
+                await asyncio.wait_for(self._server.wait_closed(), 2)
 
     def _spawn(self, coro: Any, name: str) -> asyncio.Task[Any]:
         task = asyncio.create_task(coro, name=f"{self.name}-{name}")

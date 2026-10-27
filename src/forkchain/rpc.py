@@ -29,6 +29,7 @@ class RpcServer:
         self.host = host
         self.port = port
         self._server: asyncio.Server | None = None
+        self._clients: set[asyncio.StreamWriter] = set()
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(
@@ -39,10 +40,15 @@ class RpcServer:
     async def stop(self) -> None:
         if self._server is not None:
             self._server.close()
+            # Since Python 3.12 wait_closed() also waits for every open connection, and an
+            # idle client would keep its handler (and us) waiting forever: drop them first.
+            for writer in list(self._clients):
+                writer.close()
             with contextlib.suppress(Exception):
                 await self._server.wait_closed()
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self._clients.add(writer)
         try:
             while line := await reader.readline():
                 writer.write(json.dumps(self._respond(line)).encode() + b"\n")
@@ -50,6 +56,7 @@ class RpcServer:
         except (ConnectionError, ValueError):
             pass
         finally:
+            self._clients.discard(writer)
             writer.close()
 
     def _respond(self, line: bytes) -> dict[str, Any]:
